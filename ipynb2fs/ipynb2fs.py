@@ -6,13 +6,19 @@ from __future__ import with_statement
 import os
 import sys
 import errno
+import io
 
 from fuse import FUSE, FuseOSError, Operations
 
+from IPython.nbformat import current as v3
+
 
 class Passthrough(Operations):
-    def __init__(self, root):
+    def __init__(self, root, ipynb_name):
         self.root = root
+        with io.open(ipynb_name, 'rb') as f:
+            self.ipynb = v3.read(f, 'json')
+        self.ipynb_name = ipynb_name
 
     # Helpers
     # =======
@@ -27,6 +33,7 @@ class Passthrough(Operations):
     # ==================
 
     def access(self, path, mode):
+        print("access path:",path," mode:", mode)
         full_path = self._full_path(path)
         if not os.access(full_path, mode):
             raise FuseOSError(errno.EACCES)
@@ -40,21 +47,33 @@ class Passthrough(Operations):
         return os.chown(full_path, uid, gid)
 
     def getattr(self, path, fh=None):
+        print("getattr path:",path, fh)
         full_path = self._full_path(path)
+        if path.startswith(u'/cell'):
+            print 'fake getattr'
+            full_path = self._full_path(self.ipynb_name)
+
         st = os.lstat(full_path)
         return dict((key, getattr(st, key)) for key in ('st_atime', 'st_ctime',
                      'st_gid', 'st_mode', 'st_mtime', 'st_nlink', 'st_size', 'st_uid'))
 
     def readdir(self, path, fh):
+        print("readdir path:",path," fh:", fh)
         full_path = self._full_path(path)
-
-        dirents = ['.', '..']
-        if os.path.isdir(full_path):
-            dirents.extend(os.listdir(full_path))
-        for r in dirents:
-            yield r
+        
+        if path == u'/' :
+            print 'roooooot'
+            for i,v in enumerate(self.ipynb.worksheets[0].cells):
+                yield 'cell_{:03d}'.format(i)
+        else:
+            dirents = ['.', '..']
+            if os.path.isdir(full_path):
+                dirents.extend(os.listdir(full_path))
+            for r in dirents:
+                yield r
 
     def readlink(self, path):
+        print("readlink path:",path)
         pathname = os.readlink(self._full_path(path))
         if pathname.startswith("/"):
             # Path name is absolute, sanitize it.
@@ -98,6 +117,7 @@ class Passthrough(Operations):
     # ============
 
     def open(self, path, flags):
+        print("open path:",path, flags)
         full_path = self._full_path(path)
         return os.open(full_path, flags)
 
@@ -106,6 +126,7 @@ class Passthrough(Operations):
         return os.open(full_path, os.O_WRONLY | os.O_CREAT, mode)
 
     def read(self, path, length, offset, fh):
+        print("read path:",path, length, offset, fh)
         os.lseek(fh, offset, os.SEEK_SET)
         return os.read(fh, length)
 
@@ -128,8 +149,8 @@ class Passthrough(Operations):
         return self.flush(path, fh)
 
 
-def main(mountpoint, root):
-    FUSE(Passthrough(root), mountpoint, foreground=True)
+def main(mountpoint, root, ipynb):
+    FUSE(Passthrough(root, ipynb), mountpoint, foreground=True)
 
 if __name__ == '__main__':
-    main(sys.argv[2], sys.argv[1])
+    main(sys.argv[2], sys.argv[1], sys.argv[3])
