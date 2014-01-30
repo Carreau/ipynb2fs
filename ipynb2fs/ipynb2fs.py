@@ -7,6 +7,10 @@ import os
 import sys
 import errno
 import io
+import re
+import json
+
+cre = re.compile('/cell_(\d+)')
 
 from fuse import FUSE, FuseOSError, Operations
 
@@ -19,9 +23,12 @@ class Passthrough(Operations):
         with io.open(ipynb_name, 'rb') as f:
             self.ipynb = v3.read(f, 'json')
         self.ipynb_name = ipynb_name
+        self.ipynb_full = '/Users/bussonniermatthias/ipynb2fs/'+self.ipynb_name
+        self.buffers = dict({})
 
     # Helpers
     # =======
+
 
     def _full_path(self, partial):
         if partial.startswith("/"):
@@ -35,6 +42,9 @@ class Passthrough(Operations):
     def access(self, path, mode):
         print("access path:",path," mode:", mode)
         full_path = self._full_path(path)
+        if path.startswith(u'/cell'):
+            print 'fake access'
+            full_path = '/Users/bussonniermatthias/ipynb2fs/'+self.ipynb_name
         if not os.access(full_path, mode):
             raise FuseOSError(errno.EACCES)
 
@@ -50,8 +60,9 @@ class Passthrough(Operations):
         print("getattr path:",path, fh)
         full_path = self._full_path(path)
         if path.startswith(u'/cell'):
-            print 'fake getattr'
-            full_path = self._full_path(self.ipynb_name)
+            print 'fake getattr', full_path
+            full_path = '/Users/bussonniermatthias/ipynb2fs/'+self.ipynb_name
+            print 'to getattr', full_path
 
         st = os.lstat(full_path)
         return dict((key, getattr(st, key)) for key in ('st_atime', 'st_ctime',
@@ -92,6 +103,7 @@ class Passthrough(Operations):
         return os.mkdir(self._full_path(path), mode)
 
     def statfs(self, path):
+        print('statfs path:',path)
         full_path = self._full_path(path)
         stv = os.statvfs(full_path)
         return dict((key, getattr(stv, key)) for key in ('f_bavail', 'f_bfree',
@@ -117,8 +129,23 @@ class Passthrough(Operations):
     # ============
 
     def open(self, path, flags):
+
         print("open path:",path, flags)
-        full_path = self._full_path(path)
+        m = cre.match(path)
+        if m is not None:
+            #print '---'+cre.groups()[0]+'---' 
+            crg = m.groups()[0] 
+            num = int(crg)
+            cell = self.ipynb.worksheets[0].cells[num]
+            buff = io.StringIO()
+            u = json.dumps(cell, indent=2).decode('ascii')
+            buff.write(u)
+            buff.seek(0)
+            l = len(self.buffers)
+            self.buffers[l] = buff
+            return l
+
+        full_path = self.ipynb_full
         return os.open(full_path, flags)
 
     def create(self, path, mode, fi=None):
@@ -127,15 +154,18 @@ class Passthrough(Operations):
 
     def read(self, path, length, offset, fh):
         print("read path:",path, length, offset, fh)
-        os.lseek(fh, offset, os.SEEK_SET)
-        return os.read(fh, length)
+        raise NotImplementedError('read not implemented')
+        #os.lseek(fh, offset, os.SEEK_SET)
+        #return os.read(fh, length)
 
     def write(self, path, buf, offset, fh):
         os.lseek(fh, offset, os.SEEK_SET)
+        raise NotImplementedError('write not implemented')
         return os.write(fh, buf)
 
     def truncate(self, path, length, fh=None):
         full_path = self._full_path(path)
+        raise NotImplementedError('truncate not implemented')
         with open(full_path, 'r+') as f:
             f.truncate(length)
 
@@ -143,9 +173,11 @@ class Passthrough(Operations):
         return os.fsync(fh)
 
     def release(self, path, fh):
+        raise NotImplementedError('release not implemented')
         return os.close(fh)
 
     def fsync(self, path, fdatasync, fh):
+        raise NotImplementedError('fsync not implemented')
         return self.flush(path, fh)
 
 
